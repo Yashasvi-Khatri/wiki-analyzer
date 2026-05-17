@@ -71,7 +71,7 @@ export default function Home() {
         <div className="text-center mb-14">
           <div className="inline-flex items-center gap-2 bg-white/5 border border-white/10 rounded-full px-4 py-1.5 text-xs text-indigo-300 mb-6 tracking-widest uppercase">
             <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
-            Wikipedia API · No key required
+            Wikipedia Analyzer
           </div>
           <h1
             className="text-5xl md:text-6xl font-black tracking-tight mb-4 leading-none"
@@ -234,7 +234,7 @@ export default function Home() {
 
       {/* Footer */}
       <div className="text-center py-8 text-xs text-white/15">
-        Powered by the free Wikipedia MediaWiki API · No API key needed
+        Powered by the free Wikipedia MediaWiki API ·
       </div>
     </main>
   );
