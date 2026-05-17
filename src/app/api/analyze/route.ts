@@ -25,54 +25,87 @@ async function getPagesInCategory(category: string): Promise<string[]> {
   const pages: string[] = [];
   let cmcontinue: string | undefined;
 
-  for (let i = 0; i < 3; i++) { // max 3 pages of results (1500 articles) to stay within timeout
-    const params = new URLSearchParams({
-      action: "query",
-      format: "json",
-      list: "categorymembers",
-      cmtitle: cat,
-      cmlimit: "20", // limit per batch to stay fast
-      cmtype: "page",
-      origin: "*",
-      ...(cmcontinue ? { cmcontinue } : {}),
-    });
+  try {
+    for (let i = 0; i < 2; i++) { // reduced to 2 pages to stay within timeout
+      const params = new URLSearchParams({
+        action: "query",
+        format: "json",
+        list: "categorymembers",
+        cmtitle: cat,
+        cmlimit: "10", // reduced limit per batch
+        cmtype: "page",
+        origin: "*",
+        ...(cmcontinue ? { cmcontinue } : {}),
+      });
 
-    const res = await fetch(`${WIKI_API}?${params}`);
-    const data = await res.json();
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
 
-    if (data?.query?.categorymembers) {
-      for (const m of data.query.categorymembers) pages.push(m.title);
+      const res = await fetch(`${WIKI_API}?${params}`, {
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        throw new Error(`Wikipedia API error: ${res.status}`);
+      }
+
+      const data = await res.json();
+
+      if (data?.query?.categorymembers) {
+        for (const m of data.query.categorymembers) pages.push(m.title);
+      }
+
+      if (data?.continue?.cmcontinue) {
+        cmcontinue = data.continue.cmcontinue;
+      } else break;
     }
 
-    if (data?.continue?.cmcontinue) {
-      cmcontinue = data.continue.cmcontinue;
-    } else break;
+    return pages.slice(0, 8); // reduced to 8 articles for speed
+  } catch (error) {
+    console.error("Error fetching category pages:", error);
+    throw error;
   }
-
-  return pages.slice(0, 15); // cap at 15 articles for speed
 }
 
 async function getPageContent(title: string): Promise<string> {
-  const params = new URLSearchParams({
-    action: "query",
-    format: "json",
-    titles: title,
-    prop: "extracts",
-    explaintext: "true",
-    exsectionformat: "plain",
-    exintro: "true", // only intro for speed
-    origin: "*",
-  });
+  try {
+    const params = new URLSearchParams({
+      action: "query",
+      format: "json",
+      titles: title,
+      prop: "extracts",
+      explaintext: "true",
+      exsectionformat: "plain",
+      exintro: "true", // only intro for speed
+      origin: "*",
+    });
 
-  const res = await fetch(`${WIKI_API}?${params}`);
-  const data = await res.json();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
 
-  if (data?.query?.pages) {
-    for (const id of Object.keys(data.query.pages)) {
-      return data.query.pages[id]?.extract ?? "";
+    const res = await fetch(`${WIKI_API}?${params}`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      console.error(`Wikipedia API error for ${title}: ${res.status}`);
+      return "";
     }
+
+    const data = await res.json();
+
+    if (data?.query?.pages) {
+      for (const id of Object.keys(data.query.pages)) {
+        return data.query.pages[id]?.extract ?? "";
+      }
+    }
+    return "";
+  } catch (error) {
+    console.error(`Error fetching page content for ${title}:`, error);
+    return "";
   }
-  return "";
 }
 
 function analyzeText(text: string): Map<string, number> {
@@ -104,15 +137,26 @@ export async function POST(req: NextRequest) {
 
     const totalFreq = new Map<string, number>();
 
-    await Promise.all(
+    // Process pages with individual error handling
+    const results = await Promise.allSettled(
       pages.map(async (title) => {
         const content = await getPageContent(title);
-        const freq = analyzeText(content);
-        for (const [word, count] of freq) {
-          totalFreq.set(word, (totalFreq.get(word) ?? 0) + count);
-        }
+        return analyzeText(content);
       })
     );
+
+    // Only use successful results
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        for (const [word, count] of result.value) {
+          totalFreq.set(word, (totalFreq.get(word) ?? 0) + count);
+        }
+      }
+    }
+
+    if (totalFreq.size === 0) {
+      return NextResponse.json({ error: "Could not extract content from pages. Please try again." }, { status: 500 });
+    }
 
     const topWords = [...totalFreq.entries()]
       .sort((a, b) => b[1] - a[1])
@@ -121,7 +165,8 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ pages, topWords, totalWords: totalFreq.size });
   } catch (err) {
-    console.error(err);
-    return NextResponse.json({ error: "Analysis failed. Please try again." }, { status: 500 });
+    console.error("Analysis error:", err);
+    const errorMessage = err instanceof Error ? err.message : "Unknown error";
+    return NextResponse.json({ error: `Analysis failed: ${errorMessage}` }, { status: 500 });
   }
 }
